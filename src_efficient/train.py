@@ -5,11 +5,12 @@ import torch.optim as optim
 import time
 from tqdm.auto import tqdm
 from model import build_model
-from datasets import split_datasets, get_data_loaders, SLODataset
+from datasets import split_datasets, get_data_loaders, SLODataset, BATCH_SIZE
 from utils import save_model_onnx, save_plots, save_feature_model_onnx
 from torch.utils.tensorboard import SummaryWriter
 import pandas as pd
 import numpy as np
+from sklearn.metrics import f1_score
 
 # make tensorboard work
 # once it works, can remove the save plots feature 
@@ -18,7 +19,7 @@ writer = SummaryWriter()
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
-    '-e', '--epochs', type=int, default=20,
+    '-e', '--epochs', type=int, default=1,
     help='Number of epochs to train our network for'
 )
 parser.add_argument(
@@ -41,6 +42,14 @@ def train(model, trainloader, optimizer, criterion_binary, criterion_multiclass,
     correct_dr = 0
     correct_glaucoma = 0
     counter = 0
+    
+    all_preds_me = []
+    all_labels_me = []
+    all_preds_dr = []
+    all_labels_dr = []
+    all_preds_glaucoma = []
+    all_labels_glaucoma = []
+
     for i, data in tqdm(enumerate(trainloader), total=len(trainloader)):
         counter += 1
         # load images and labels and send to device
@@ -74,6 +83,15 @@ def train(model, trainloader, optimizer, criterion_binary, criterion_multiclass,
         correct_dr += (preds_binary[:, 1] == label_dr).sum().item()
         correct_glaucoma += (pred_multiclass == label_glaucoma).sum().item()
 
+        all_preds_me.extend(preds_binary[:, 0].detach().cpu().numpy())
+        all_labels_me.extend(label_me.detach().cpu().numpy())
+
+        all_preds_dr.extend(preds_binary[:, 1].detach().cpu().numpy())
+        all_labels_dr.extend(label_dr.detach().cpu().numpy())
+
+        all_preds_glaucoma.extend(pred_multiclass.detach().cpu().numpy())
+        all_labels_glaucoma.extend(label_glaucoma.detach().cpu().numpy())
+
         loss.backward()
         optimizer.step()
     
@@ -82,7 +100,11 @@ def train(model, trainloader, optimizer, criterion_binary, criterion_multiclass,
     epoch_acc_dr = correct_dr / len(trainloader.dataset)
     epoch_acc_glaucoma = correct_glaucoma / len(trainloader.dataset)
 
-    return epoch_loss , epoch_acc_me, epoch_acc_dr, epoch_acc_glaucoma
+    f1_me = f1_score(all_labels_me, all_preds_me, average='binary', zero_division=0)
+    f1_dr = f1_score(all_labels_dr, all_preds_dr, average='binary', zero_division=0)
+    f1_glaucoma = f1_score(all_labels_glaucoma, all_preds_glaucoma, average='macro', zero_division=0)
+
+    return epoch_loss , epoch_acc_me, epoch_acc_dr, epoch_acc_glaucoma, f1_me, f1_dr, f1_glaucoma
 
 def validate(model, validloader, criterion_binary, criterion_multiclass, alpha=1, beta=1):
     model.eval()
@@ -93,6 +115,14 @@ def validate(model, validloader, criterion_binary, criterion_multiclass, alpha=1
     correct_dr = 0
     correct_glaucoma = 0
     counter = 0
+
+    # test
+    all_preds_me = []
+    all_labels_me = []
+    all_preds_dr = []
+    all_labels_dr = []
+    all_preds_glaucoma = []
+    all_labels_glaucoma = []
 
     with torch.no_grad():
         for i, data in tqdm(enumerate(validloader), total=len(validloader)):
@@ -125,20 +155,36 @@ def validate(model, validloader, criterion_binary, criterion_multiclass, alpha=1
             correct_me += (preds_binary[:, 0] == label_me).sum().item()
             correct_dr += (preds_binary[:, 1] == label_dr).sum().item()
             correct_glaucoma += (pred_multiclass == label_glaucoma).sum().item()
+
+            # testing how to create longer preds arrays to then compare at the end to calculate F1 and accuracy
+            all_preds_me.extend(preds_binary[:, 0].detach().cpu().numpy())
+            all_labels_me.extend(label_me.detach().cpu().numpy())
+
+            all_preds_dr.extend(preds_binary[:, 1].detach().cpu().numpy())
+            all_labels_dr.extend(label_dr.detach().cpu().numpy())
+
+            all_preds_glaucoma.extend(pred_multiclass.detach().cpu().numpy())
+            all_labels_glaucoma.extend(label_glaucoma.detach().cpu().numpy())
+
         
     epoch_loss = valid_running_loss / counter
     epoch_acc_me = correct_me / len(validloader.dataset)
     epoch_acc_dr = correct_dr / len(validloader.dataset)
     epoch_acc_glaucoma = correct_glaucoma / len(validloader.dataset)
 
-    return epoch_loss, epoch_acc_me, epoch_acc_dr, epoch_acc_glaucoma
+    # f1 score
+    f1_me = f1_score(all_labels_me, all_preds_me, average='binary', zero_division=0)
+    f1_dr = f1_score(all_labels_dr, all_preds_dr, average='binary', zero_division=0)
+    f1_glaucoma = f1_score(all_labels_glaucoma, all_preds_glaucoma, average='macro', zero_division=0)
+
+    return epoch_loss, epoch_acc_me, epoch_acc_dr, epoch_acc_glaucoma, f1_me, f1_dr, f1_glaucoma
 
 if __name__ == '__main__':
 
     df = pd.read_csv("Images/Retina-SLO_dataset/Retina-SLO_labels/Retina-SLO.txt",
                     sep=":|,", engine='python')
     df.rename(columns={'img_path ': 'img_path', ' ME_GT': 'ME', ' DR_GT': 'DR', ' glaucoma_GT': 'glaucoma'}, inplace=True)
-    #df = df[:20]
+    df = df[:20]
     df['glaucoma'] = df['glaucoma'].str.strip("; ")
     df['img_path'] = df['img_path'].str.strip()
     df = df[df['img_path'].str.contains('study1')]
@@ -189,9 +235,9 @@ if __name__ == '__main__':
 
     for epoch in range(epochs):
         print(f"[INFO]: Epoch {epoch+1} of {epochs}")
-        train_epoch_loss, train_epoch_acc_me, train_epoch_acc_dr, train_epoch_acc_glaucoma = train(model, train_loader, 
+        train_epoch_loss, train_epoch_acc_me, train_epoch_acc_dr, train_epoch_acc_glaucoma, train_epoch_f1_me, train_epoch_f1_dr, train_epoch_f1_glaucoma = train(model, train_loader, 
                                                 optimizer, criterion_binary, criterion_multiclass)
-        valid_epoch_loss, valid_epoch_acc_me, valid_epoch_acc_dr, valid_epoch_acc_glaucoma   = validate(model, valid_loader,  
+        valid_epoch_loss, valid_epoch_acc_me, valid_epoch_acc_dr, valid_epoch_acc_glaucoma, valid_epoch_f1_me, valid_epoch_f1_dr, valid_epoch_f1_glaucoma  = validate(model, valid_loader,  
                                                     criterion_binary, criterion_multiclass)
         # for tensorboard
         writer.add_scalar("Loss/train", train_epoch_loss, epoch)
@@ -215,8 +261,8 @@ if __name__ == '__main__':
         train_acc_glaucoma.append(train_epoch_acc_glaucoma)
         valid_acc_glaucoma.append(valid_epoch_acc_glaucoma)
 
-        print(f"Training loss: {train_epoch_loss:.3f}, training acc me: {train_epoch_acc_me:.3f}, training acc dr: {train_epoch_acc_dr:.3f}, training acc glaucoma: {train_epoch_acc_glaucoma:.3f}")
-        print(f"Validation loss: {valid_epoch_loss:.3f}, validation acc me: {valid_epoch_acc_me:.3f}, validation acc dr: {valid_epoch_acc_dr:.3f}, validation acc glaucoma: {valid_epoch_acc_glaucoma:.3f}")
+        print(f"Training loss: {train_epoch_loss:.3f}, training acc me: {train_epoch_acc_me:.3f}, training acc dr: {train_epoch_acc_dr:.3f}, training acc glaucoma: {train_epoch_acc_glaucoma:.3f}, training f1 me: {train_epoch_f1_me:.3f}, training f1 dr: {train_epoch_f1_dr:.3f}, training f1 glaucoma: {train_epoch_f1_glaucoma:.3f}")
+        print(f"Validation loss: {valid_epoch_loss:.3f}, validation acc me: {valid_epoch_acc_me:.3f}, validation acc dr: {valid_epoch_acc_dr:.3f}, validation acc glaucoma: {valid_epoch_acc_glaucoma:.3f}, validation f1 me: {valid_epoch_f1_me:.3f}, validation f1 dr: {valid_epoch_f1_dr:.3f}, validation f1 glaucoma: {valid_epoch_f1_glaucoma:.3f} ")
         print('-'*50)
 
         # early stopping
