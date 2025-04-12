@@ -11,7 +11,7 @@ ROOT_DIR = './Images/Retina-SLO/'
 VALID_SPLIT = 0.15
 TEST_SPLIT = 0.15
 IMAGE_SIZE = 224
-BATCH_SIZE = 64
+BATCH_SIZE = 16
 NUM_WORKERS = 0
 
 torch.manual_seed(1) # for reproducibility
@@ -34,6 +34,9 @@ class SLODataset(Dataset):
             # here can add augmentations to be used in training
             transform = transforms.Compose([
                 transforms.Resize((self.IMAGE_SIZE, self.IMAGE_SIZE)),
+                transforms.RandomHorizontalFlip(p=0.5),
+                transforms.RandomRotation(degrees=15),  
+                transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225]) # from https://pytorch.org/vision/stable/models/generated/torchvision.models.efficientnet_b0.html#torchvision.models.efficientnet_b0
             ])
