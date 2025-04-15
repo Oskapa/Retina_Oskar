@@ -7,11 +7,13 @@ from PIL import Image
 import os
 import matplotlib.pyplot as plt
 
+torch.manual_seed(1)
+
 ROOT_DIR = './Images/Retina-SLO/'
 VALID_SPLIT = 0.15
 TEST_SPLIT = 0.15
 IMAGE_SIZE = 224
-BATCH_SIZE = 16
+BATCH_SIZE = 32
 NUM_WORKERS = 0
 
 torch.manual_seed(1) # for reproducibility
@@ -93,7 +95,7 @@ def split_datasets(df, pretrained, root_dir):
     dataset_test = Subset(dataset, indices[(train_size+valid_size):])
     return dataset_train, dataset_valid, dataset_test
 
-def get_data_loaders(dataset_train, dataset_valid, dataset_test):
+def get_data_loaders(dataset_train, dataset_valid, dataset_test, batch_size=BATCH_SIZE):
     """
     Prepares the training and validation data loaders.
     :param dataset_train: The training dataset.
@@ -101,15 +103,15 @@ def get_data_loaders(dataset_train, dataset_valid, dataset_test):
     Returns the training and validation data loaders.
     """
     train_loader = DataLoader(
-        dataset_train, batch_size=BATCH_SIZE, 
+        dataset_train, batch_size, 
         shuffle=True, num_workers=NUM_WORKERS
     )
     valid_loader = DataLoader(
-        dataset_valid, batch_size=BATCH_SIZE, 
+        dataset_valid, batch_size, 
         shuffle=False, num_workers=NUM_WORKERS
     )
     test_loader = DataLoader(
-        dataset_test, batch_size=BATCH_SIZE,
+        dataset_test, batch_size,
         shuffle=False, num_workers=NUM_WORKERS
     )
     return train_loader, valid_loader, test_loader
